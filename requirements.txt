@@ -1,0 +1,12 @@
+--find-links https://download.pytorch.org/whl/cu121
+torch>=2.1.0,<3.0.0
+torchvision
+torchaudio
+transformers>=4.39.0,<5.0.0
+datasets>=2.18.0,<3.0.0
+numpy>=1.23.0,<2.0.0
+scipy>=1.10.0,<2.0.0
+tqdm>=4.65.0
+jupyter
+tokenizers>=0.15.0,<1.0.0
+accelerate
