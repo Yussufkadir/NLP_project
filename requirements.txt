@@ -10,3 +10,11 @@ tqdm>=4.65.0
 jupyter
 tokenizers>=0.15.0,<1.0.0
 accelerate
+streamlit
+peft
+langchain
+langchain-community
+langchain-huggingface
+sentence-transformers
+faiss-cpu
+pypdf

@@ -44,7 +44,24 @@ def load_model_and_tokenizer():
         st.error(f"Error loading model and tokenizer")
         st.stop()
 
+@st.cache_resource
+def setup_emergency():
+    emergency_resources = {
+        "suicide_prevention": {
+            "hotline": "112 or 800 70 2222 (psychological crisis line)",
+            "website": "www.telefonzaufania.org"
+        },
+        "response": """I notice you mentioned something concerning. If you're having thoughts of harming yourself, please know that help is available. 
 
+**Immediate resources:**
+- National Suicide Prevention Lifeline: 112 or 800 70 2222 (available 24/7)
+- Or go to your nearest emergency room
+
+Would you like me to provide more specific resources or someone to talk to right now?
+
+Remember, you're not alone, and trained professionals are ready to help."""
+    }
+    return emergency_resources
 @st.cache_resource
 def setup_rag(_direct_model, _tokenizer):
     st.sidebar.text("Setting up rag..")
@@ -126,8 +143,25 @@ def get_chatbot_response(user_query, direct_model_instance, tokenizer_instance, 
             "tell me more about", "explain", "what does the document say about", 
             "details on", "resources for", "coping mechanisms for", "information on"
         ]
+
+        critical_keywords = [
+            "kill", "death", "suicide", "suicidal", "lethal",
+            "damage myself", "I want to end myself", "I want to bring an end to this",
+            "I do not want to live anymore", "I dont want to live"
+        ]
     
     use_rag = False
+    use_emergency = False
+
+    for keyword in critical_keywords:
+        if keyword.lower() in user_query.lower():
+            use_emergency = True
+            break
+    
+    if use_emergency:
+        st.sidebar.warning("Emergency content detected - providing crisis resources")
+        emergency_resources = setup_emergency()
+        return emergency_resources["response"]
 
     if qa_chain_rag_instance:
         for keyword in rag_keywords:
@@ -160,13 +194,18 @@ def get_chatbot_response(user_query, direct_model_instance, tokenizer_instance, 
             inputs = tokenizer_instance(user_query, return_tensors="pt", max_length=512, truncation=True)
             inputs = {k: v.to(DEVICE) for k, v in inputs.items()}
 
+            max_len = len_balancer(user_query)
+
             with torch.no_grad():
                 outputs = direct_model_instance.generate(
                     **inputs,
-                    max_length=400,
+                    max_length=max_len,
                     num_beams=4,
                     early_stopping=True,
-                    do_sample=False
+                    do_sample=False,
+                    temperature=0.3,
+                    repetition_penalty=1.2,
+                    no_repeat_ngram_size=3
                 )
             direct_answer = tokenizer_instance.decode(outputs[0], skip_special_tokens=True)
 
@@ -191,13 +230,45 @@ def get_chatbot_response(user_query, direct_model_instance, tokenizer_instance, 
             response_text = "Sorry, I encountered an error processing your request."
     if not response_text.strip():
         response_text = "I'm unable to provide a response at this moment. Please try again later or rephrase your question."
-
+    response_text = remove_repetitions(response_text)
     return response_text
+
+def remove_repetitions(text):
+    sentences = text.split('. ')
+    unique_sentences = []
+    
+    for sentence in sentences:
+        if sentence and sentence not in unique_sentences:
+            unique_sentences.append(sentence)
+
+    cleaned_text = '. '.join(unique_sentences)
+    if text.endswith('.'):
+        cleaned_text += '.'
+    return cleaned_text
+
+def len_balancer(query):
+    tokens = len(query.split())
+
+    if "explain" in query.lower() or "details" in query.lower():
+        return 350
+    elif tokens < 8:
+        return 150
+    else:
+        return 250
+
 
 def main():
     st.title("Mental Health Support Chatbot")
     st.caption("This chatbot can provide general information and support. It is not a replacement for professional medical advice. Type 'exit' or 'quit' to end the session.")
 
+    with st.expander("Emergency Resources", expanded=False):
+        st.markdown("""
+        **If you're experiencing a mental health emergency:**
+        - National Suicide Prevention Lifeline: 112 or 800 70 2222
+        - Call your local emergency services: 112 (EU)
+        - Go to your nearest emergency room
+        """)
+       
     with st.spinner("Initializing chatbot... This might take a moment on first run."):
         direct_model_instance, tokenizer_instance = load_model_and_tokenizer()
         qa_chain_rag_instance = setup_rag(direct_model_instance, tokenizer_instance)
