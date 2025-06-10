@@ -101,9 +101,9 @@ def setup_rag(_direct_model, _tokenizer):
             model=_direct_model,
             tokenizer=_tokenizer,
             device=0 if DEVICE.type=="cuda" else -1,
-            max_new_tokens=400,
+            max_new_tokens=800,
             do_sample=True,
-            temperature=0.3,
+            temperature=0.7,
             top_p=0.4,
             truncation=True,
             max_length=1024
@@ -200,12 +200,13 @@ def get_chatbot_response(user_query, direct_model_instance, tokenizer_instance, 
                 outputs = direct_model_instance.generate(
                     **inputs,
                     max_length=max_len,
-                    num_beams=4,
-                    early_stopping=True,
-                    do_sample=False,
-                    temperature=0.3,
+                    num_beams=5,
+                    early_stopping=False,
+                    do_sample=True,
+                    temperature=0.6,
                     repetition_penalty=1.2,
-                    no_repeat_ngram_size=3
+                    no_repeat_ngram_size=3,
+                    length_penalty=1.5
                 )
             direct_answer = tokenizer_instance.decode(outputs[0], skip_special_tokens=True)
 
@@ -250,11 +251,11 @@ def len_balancer(query):
     tokens = len(query.split())
 
     if "explain" in query.lower() or "details" in query.lower():
-        return 350
+        return 1000
     elif tokens < 8:
-        return 150
+        return 600
     else:
-        return 250
+        return 800
 
 
 def main():
