@@ -140,11 +140,15 @@ Helpful Answer:"""
 def get_chatbot_response(user_query, direct_model_instance, tokenizer_instance, qa_chain_rag_instance, rag_keywords=None):
     if rag_keywords is None:
         rag_keywords = [
-            "tell me more about", "explain", "what does the document say about", 
-            "details on", "resources for", "coping mechanisms for", "information on"
+            "resources for", "coping mechanisms for", "techniques for", 
+            "exercises for", "strategies in the documents", "in your resources"
         ]
 
-        critical_keywords = [
+    explanation_keywords = [
+        "explain", "what is", "definition of", "describe", "tell me about",
+        "overview of", "symptoms of", "causes of", "understand"
+    ]
+    critical_keywords = [
             "kill", "death", "suicide", "suicidal", "lethal",
             "damage myself", "I want to end myself", "I want to bring an end to this",
             "I do not want to live anymore", "I dont want to live"
@@ -152,50 +156,84 @@ def get_chatbot_response(user_query, direct_model_instance, tokenizer_instance, 
     
     use_rag = False
     use_emergency = False
+    use_explanation = False
 
     for keyword in critical_keywords:
         if keyword.lower() in user_query.lower():
             use_emergency = True
             break
     
-    if use_emergency:
-        st.sidebar.warning("Emergency content detected - providing crisis resources")
-        emergency_resources = setup_emergency()
-        return emergency_resources["response"]
-
-    if qa_chain_rag_instance:
+    if not use_emergency:
+        for keyword in explanation_keywords:
+            if keyword.lower() in user_query.lower():
+                use_explanation = True
+                break
+    
+    if not use_emergency and not use_explanation:
         for keyword in rag_keywords:
             if keyword.lower() in user_query.lower():
                 use_rag = True
                 break
     
     response_text = ""
-    source_info_docs_info = None
 
-    if use_rag and qa_chain_rag_instance:
+    if use_emergency:
+        st.sidebar.warning("Emergency content detected - providing crisis resources")
+        emergency_resources = setup_emergency()
+        response_text = emergency_resources["response"]
+
+    elif use_explanation:
+        st.sidebar.info("Explanation request detected - using direct model")
+        try:
+            explanation_query_text = user_query
+            if not any(q_word in user_query.lower() for q_word in ["what is", "explain", "definition of", "describe", "tell me about", "overview of", "symptoms of", "causes of", "understand"]):
+                explanation_query_text = f"Explain what {user_query} is in detail"
+            
+            inputs = tokenizer_instance(explanation_query_text, return_tensors="pt", max_length=512, truncation=True)
+            inputs = {k: v.to(DEVICE) for k, v in inputs.items()}
+            max_len = len_balancer(explanation_query_text)
+            
+            with torch.no_grad():
+                outputs = direct_model_instance.generate(
+                    **inputs,
+                    max_length=max_len,
+                    num_beams=5,
+                    early_stopping=False,
+                    do_sample=True,
+                    temperature=0.6,
+                    repetition_penalty=1.2,
+                    no_repeat_ngram_size=3,
+                    length_penalty=1.5
+                )
+            response_text = tokenizer_instance.decode(outputs[0], skip_special_tokens=True)
+        except Exception as e:
+            st.sidebar.error(f"Error generating explanation: {e}")
+
+    elif use_rag and qa_chain_rag_instance:
         st.sidebar.info("Attempting RAG pipeline...")
         try:
-            rag_result = qa_chain_rag_instance.invoke({"query":user_query})
-            response_text = rag_result.get("result", "No specific information found in documents.")
-            if rag_result.get("source_documents"):
-                source_info_docs_info = [doc.metadata.get("source", "Unknown source") for doc in rag_result["source_documents"]]
-                st.sidebar.write("RAG Sources", source_info_docs_info)
+            rag_result = qa_chain_rag_instance.invoke({"query": user_query})
+            potential_rag_response = rag_result.get("result", "")
+            unhelpful_rag_phrases = ["don't know", "no specific information found", "not sure how to answer that"]
+            is_unhelpful = any(phrase in potential_rag_response.lower() for phrase in unhelpful_rag_phrases)
 
+            if potential_rag_response and not is_unhelpful and len(potential_rag_response.strip()) > 20:
+                response_text = potential_rag_response
+                if rag_result.get("source_documents"):
+                    source_info_docs_info = [doc.metadata.get("source", "Unknown source") for doc in rag_result["source_documents"]]
+                    st.sidebar.write("RAG Sources", source_info_docs_info)
+            else:
+                st.sidebar.info("RAG response was not informative or empty, will try direct model.")
         except Exception as e:
-            st.sidebar.error(f"Error during rag query: {e}")
-            response_text = "Sorry, I had trouble finding detailed information. Let me try a general answer."
-            use_rag=False
-    
-    if not use_rag or not response_text:
-        if not use_rag:
-            st.sidebar.info("using direct model")
-        
+            st.sidebar.error(f"Error during RAG query: {e}")
+            st.sidebar.info("Will try direct model due to RAG error.")
+
+    if not response_text.strip():
+        st.sidebar.info("Using direct model for general query or as fallback.")
         try:
             inputs = tokenizer_instance(user_query, return_tensors="pt", max_length=512, truncation=True)
             inputs = {k: v.to(DEVICE) for k, v in inputs.items()}
-
             max_len = len_balancer(user_query)
-
             with torch.no_grad():
                 outputs = direct_model_instance.generate(
                     **inputs,
@@ -209,28 +247,14 @@ def get_chatbot_response(user_query, direct_model_instance, tokenizer_instance, 
                     length_penalty=1.5
                 )
             direct_answer = tokenizer_instance.decode(outputs[0], skip_special_tokens=True)
-
-            if not direct_answer.strip() and qa_chain_rag_instance and not response_text:
-                st.sidebar.info("Direct model repsonse was empty, trying RAG as fallback...")
-                try:
-                    rag_result = qa_chain_rag_instance.invoke({"query":user_query})
-                    response_text = rag_result.get("result", "I'm not sure how to answer that.")
-                    if rag_result.get("source_documents"):
-                        source_docs_info = [doc.metadata.get("source", "Unknown source") for doc in rag_result["source_documents"]]
-                        st.sidebar.write("RAG fallback sources:", source_docs_info)
-                except Exception as e:
-                    st.sidebar.error(f"Error during RAG fallback: {e}")
-                    response_text = "I'm having trouble finding an answer right now."
-            elif direct_answer.strip():
+            if direct_answer.strip():
                 response_text = direct_answer
-            elif not direct_answer.strip() and not response_text:
-                response_text = "I'm not sure how to respond to that. Could you please rephrase?"
-            
         except Exception as e:
             st.sidebar.error(f"Error during direct model query: {e}")
-            response_text = "Sorry, I encountered an error processing your request."
+
     if not response_text.strip():
         response_text = "I'm unable to provide a response at this moment. Please try again later or rephrase your question."
+    
     response_text = remove_repetitions(response_text)
     return response_text
 
